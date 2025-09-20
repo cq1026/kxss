@@ -762,12 +762,35 @@ async def creds_action(request: CredFileActionRequest, token: str = Depends(veri
         # 获取存储适配器
         storage_adapter = await get_storage_adapter()
         
-        # 检查凭证是否存在
+        # --- [代码修改开始] ---
+        # 针对删除操作，使用不同的检查逻辑来处理"幽灵"凭证
+        if action == "delete":
+            # 检查凭证名称是否存在于列表中，而不是检查其内容
+            all_credentials = await storage_adapter.list_credentials()
+            if filename not in all_credentials:
+                log.error(f"Attempted to delete non-existent credential: {filename}")
+                raise HTTPException(status_code=404, detail="凭证文件不存在")
+            
+            try:
+                # 执行删除
+                success = await storage_adapter.delete_credential(filename)
+                if success:
+                    log.info(f"Successfully deleted credential: {filename}")
+                    return JSONResponse(content={"message": f"已删除凭证文件 {os.path.basename(filename)}"})
+                else:
+                    raise HTTPException(status_code=500, detail="删除凭证失败")
+            except Exception as e:
+                log.error(f"Error deleting credential {filename}: {e}")
+                raise HTTPException(status_code=500, detail=f"删除文件失败: {str(e)}")
+        # --- [代码修改结束] ---
+
+        # 对于启用/禁用等其他操作，保持原有逻辑
+        # 检查凭证内容是否存在
         credential_data = await storage_adapter.get_credential(filename)
         if not credential_data:
-            log.error(f"Credential not found: {filename}")
+            log.error(f"Credential not found for action '{action}': {filename}")
             raise HTTPException(status_code=404, detail="凭证文件不存在")
-        
+
         if action == "enable":
             log.info(f"Web request: ENABLING file {filename}")
             await credential_manager.set_cred_disabled(filename, False)
@@ -779,19 +802,6 @@ async def creds_action(request: CredFileActionRequest, token: str = Depends(veri
             await credential_manager.set_cred_disabled(filename, True)
             log.info(f"Web request: DISABLED file {filename} successfully")
             return JSONResponse(content={"message": f"已禁用凭证文件 {os.path.basename(filename)}"})
-        
-        elif action == "delete":
-            try:
-                # 使用存储适配器删除凭证
-                success = await storage_adapter.delete_credential(filename)
-                if success:
-                    log.info(f"Successfully deleted credential: {filename}")
-                    return JSONResponse(content={"message": f"已删除凭证文件 {os.path.basename(filename)}"})
-                else:
-                    raise HTTPException(status_code=500, detail="删除凭证失败")
-            except Exception as e:
-                log.error(f"Error deleting credential {filename}: {e}")
-                raise HTTPException(status_code=500, detail=f"删除文件失败: {str(e)}")
         
         else:
             raise HTTPException(status_code=400, detail="无效的操作类型")
